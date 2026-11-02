@@ -1,0 +1,69 @@
+name: Index reader portability
+
+on:
+  push:
+    branches: [codex/validate-index-reader-portability]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readers:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GNU
+            os: ubuntu-latest
+            target: ""
+          - name: Linux musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - name: macOS
+            os: macos-latest
+            target: ""
+          - name: Windows
+            os: windows-latest
+            target: ""
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      TEST_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Set up Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup default 1.99.0
+          if [[ -n "$TEST_TARGET" ]]; then
+            rustup target add "$TEST_TARGET"
+          fi
+      - name: Install musl compiler
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+          sudo ln -s /usr/bin/musl-gcc /usr/bin/musl-g++
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: index-readers-${{ matrix.name }}
+      - name: Test indexing library and portable archive readers
+        shell: bash
+        run: |
+          test_args=()
+          if [[ -n "$TEST_TARGET" ]]; then
+            test_args+=(--target "$TEST_TARGET")
+            export CC_x86_64_unknown_linux_musl=musl-gcc
+            export CXX_x86_64_unknown_linux_musl=musl-g++
+          fi
+          cargo test --locked -p rattler_index --lib \
+            --no-default-features --features rustls "${test_args[@]}"
